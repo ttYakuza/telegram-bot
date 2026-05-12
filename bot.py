@@ -1,187 +1,357 @@
-import os
+import sqlite3
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
+
 from telegram.ext import (
-Application,
-CommandHandler,
-CallbackQueryHandler,
-ContextTypes,
-MessageHandler,
-filters,
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes
 )
-from database import Database
 
+# =========================
+# TOKEN
+# =========================
+BOT_TOKEN = "8407362693:AAG8sBcu4U2REOVUsEXNVwANSGcpZsjBgRg"
+
+# =========================
+# LOGGING
+# =========================
 logging.basicConfig(
-format=”%(asctime)s - %(name)s - %(levelname)s - %(message)s”,
-level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
 )
-logger = logging.getLogger(**name**)
 
-BOT_TOKEN = os.environ.get(“BOT_TOKEN”, “”)
+logger = logging.getLogger(__name__)
 
-db = Database()
+# =========================
+# DATABASE
+# =========================
+conn = sqlite3.connect("referral.db", check_same_thread=False)
+cursor = conn.cursor()
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    full_name TEXT,
+    username TEXT,
+    referrer_id INTEGER
+)
+""")
+
+conn.commit()
+
+# =========================
+# START
+# =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-user = update.effective_user
-args = context.args
 
-```
-referrer_id = None
-if args:
-    try:
-        referrer_id = int(args[0])
-        if referrer_id == user.id:
+    user = update.effective_user
+    args = context.args
+
+    referrer_id = None
+
+    if args:
+        try:
+            referrer_id = int(args[0])
+
+            if referrer_id == user.id:
+                referrer_id = None
+
+        except:
             referrer_id = None
-    except ValueError:
-        referrer_id = None
 
-is_new = db.register_user(
-    user_id=user.id,
-    username=user.username or "",
-    full_name=user.full_name,
-    referrer_id=referrer_id
-)
+    # user mavjudmi
+    cursor.execute(
+        "SELECT * FROM users WHERE user_id = ?",
+        (user.id,)
+    )
 
-if is_new and referrer_id:
-    try:
-        referrer = db.get_user(referrer_id)
-        if referrer:
-            count = db.get_referral_count(referrer_id)
-            await context.bot.send_message(
-                chat_id=referrer_id,
-                text="<b>" + user.full_name + "</b> sizning havolangiz orqali qoshildi!\n"
-                     "Sizning jami referrallaringiz: <b>" + str(count) + "</b> ta",
-                parse_mode="HTML"
+    existing_user = cursor.fetchone()
+
+    # yangi user
+    if not existing_user:
+
+        cursor.execute(
+            """
+            INSERT INTO users
+            (user_id, full_name, username, referrer_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                user.id,
+                user.full_name,
+                user.username,
+                referrer_id
             )
-    except Exception as e:
-        logger.error("Xato: " + str(e))
+        )
 
-keyboard = [
-    [InlineKeyboardButton("Mening referrallarim", callback_data="my_referrals")],
-    [InlineKeyboardButton("Taklif havolam", callback_data="my_link")],
-    [InlineKeyboardButton("Reyting", callback_data="top_referrers")],
-]
-reply_markup = InlineKeyboardMarkup(keyboard)
+        conn.commit()
 
-welcome_text = (
-    "Salom, <b>" + user.full_name + "</b>!\n\n"
-    "Bu bot orqali dostlaringizni taklif qiling va statistikangizni kuzating.\n\n"
-    "Quyidagi bolimlardan birini tanlang:"
-)
+        # referral xabari
+        if referrer_id:
 
-if update.message:
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="HTML")
-else:
-    await update.callback_query.edit_message_text(welcome_text, reply_markup=reply_markup, parse_mode="HTML")
-```
+            cursor.execute(
+                "SELECT COUNT(*) FROM users WHERE referrer_id = ?",
+                (referrer_id,)
+            )
 
-async def my_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
-query = update.callback_query
-await query.answer()
+            count = cursor.fetchone()[0]
 
-```
-user_id = query.from_user.id
-referrals = db.get_referrals(user_id)
-count = len(referrals)
+            try:
+                await context.bot.send_message(
+                    chat_id=referrer_id,
+                    text=(
+                        f"🎉 <b>{user.full_name}</b> "
+                        f"sizning havolangiz orqali qo‘shildi!\n\n"
+                        f"📊 Jami referral: <b>{count}</b> ta"
+                    ),
+                    parse_mode="HTML"
+                )
 
-if count == 0:
-    text = "<b>Mening referrallarim</b>\n\nHali hech kim qoshilmagan.\nDostlaringizga havolangizni yuboring!"
-else:
-    text = "<b>Mening referrallarim</b> (" + str(count) + " ta)\n\n"
-    for i, ref in enumerate(referrals, 1):
-        name = ref["full_name"] or "Anonim"
-        username = "@" + ref["username"] if ref["username"] else ""
-        date = ref["joined_at"][:10]
-        text += str(i) + ". " + name + " " + username + " - " + date + "\n"
+            except Exception as e:
+                logger.error(e)
 
-keyboard = [[InlineKeyboardButton("Orqaga", callback_data="back_main")]]
-await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
-```
+    # menu
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "👥 Referrallarim",
+                callback_data="refs"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔗 Taklif linkim",
+                callback_data="link"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🏆 Reyting",
+                callback_data="top"
+            )
+        ]
+    ]
 
-async def my_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-query = update.callback_query
-await query.answer()
+    text = (
+        f"Salom <b>{user.full_name}</b> 👋\n\n"
+        "Do‘stlaringizni taklif qiling "
+        "va referral yig‘ing."
+    )
 
-```
-user_id = query.from_user.id
-bot_username = (await context.bot.get_me()).username
-referral_link = "https://t.me/" + bot_username + "?start=" + str(user_id)
-count = db.get_referral_count(user_id)
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
 
-text = (
-    "<b>Sizning taklif havolangiz:</b>\n\n"
-    "<code>" + referral_link + "</code>\n\n"
-    "Siz orqali qoshilganlar: <b>" + str(count) + "</b> ta\n\n"
-    "Ushbu havolani dostlaringizga yuboring!"
-)
+# =========================
+# BUTTONS
+# =========================
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-keyboard = [[InlineKeyboardButton("Orqaga", callback_data="back_main")]]
-await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
-```
+    query = update.callback_query
+    await query.answer()
 
-async def top_referrers(update: Update, context: ContextTypes.DEFAULT_TYPE):
-query = update.callback_query
-await query.answer()
+    user_id = query.from_user.id
 
-```
-top = db.get_top_referrers(limit=10)
+    # =====================
+    # REFERRALS
+    # =====================
+    if query.data == "refs":
 
-if not top:
-    text = "<b>Reyting</b>\n\nHali malumot yoq."
-else:
-    text = "<b>Top referralchilar</b>\n\n"
-    for i, user in enumerate(top):
-        medal = str(i+1) + "."
-        name = user["full_name"] or "Anonim"
-        username = "@" + user["username"] if user["username"] else ""
-        count = user["referral_count"]
-        text += medal + " " + name + " " + username + " - <b>" + str(count) + "</b> ta\n"
+        cursor.execute(
+            """
+            SELECT full_name, username
+            FROM users
+            WHERE referrer_id = ?
+            """,
+            (user_id,)
+        )
 
-keyboard = [[InlineKeyboardButton("Orqaga", callback_data="back_main")]]
-await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
-```
+        refs = cursor.fetchall()
 
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-ADMIN_ID = 1964705682
+        if not refs:
 
-```
-if update.effective_user.id != ADMIN_ID:
-    await update.message.reply_text("Sizda ruxsat yoq.")
-    return
+            text = "❌ Sizda referral yo‘q."
 
-total_users = db.get_total_users()
-total_referrals = db.get_total_referrals()
+        else:
 
-text = (
-    "<b>Umumiy statistika</b>\n\n"
-    "Jami foydalanuvchilar: <b>" + str(total_users) + "</b>\n"
-    "Referral orqali qoshilganlar: <b>" + str(total_referrals) + "</b>\n"
-)
-await update.message.reply_text(text, parse_mode="HTML")
-```
+            text = f"👥 Referrallar: {len(refs)} ta\n\n"
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-query = update.callback_query
-data = query.data
+            for i, ref in enumerate(refs, start==1):
 
-```
-if data == "my_referrals":
-    await my_referrals(update, context)
-elif data == "my_link":
-    await my_link(update, context)
-elif data == "top_referrers":
-    await top_referrers(update, context)
-elif data == "back_main":
-    await start(update, context)
-```
+                name = ref[0]
+                username = ref[1]
 
+                if username:
+                    text += f"{i}. {name} (@{username})\n"
+                else:
+                    text += f"{i}. {name}\n"
+
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "⬅️ Orqaga",
+                    callback_data="back"
+                )
+            ]
+        ]
+
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    # =====================
+    # LINK
+    # =====================
+    elif query.data == "link":
+
+        bot = await context.bot.get_me()
+
+        link = f"https://t.me/{bot.username}?start={user_id}"
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM users WHERE referrer_id = ?",
+            (user_id,)
+        )
+
+        count = cursor.fetchone()[0]
+
+        text = (
+            "🔗 Sizning taklif havolangiz:\n\n"
+            f"{link}\n\n"
+            f"👥 Referral: {count} ta"
+        )
+
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "⬅️ Orqaga",
+                    callback_data="back"
+                )
+            ]
+        ]
+
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    # =====================
+    # TOP
+    # =====================
+    elif query.data == "top":
+
+        cursor.execute("""
+        SELECT full_name, username, COUNT(*) as total
+        FROM users
+        WHERE referrer_id IS NOT NULL
+        GROUP BY referrer_id
+        ORDER BY total DESC
+        LIMIT 10
+        """)
+
+        top_users = cursor.fetchall()
+
+        if not top_users:
+
+            text = "❌ Reyting bo‘sh."
+
+        else:
+
+            text = "🏆 TOP REFERRALCHILAR\n\n"
+
+            for i, user in enumerate(top_users, start==1):
+
+                name = user[0]
+                username = user[1]
+                total = user[2]
+
+                if username:
+                    text += f"{i}. {name} (@{username}) - {total}\n"
+                else:
+                    text += f"{i}. {name} - {total}\n"
+
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "⬅️ Orqaga",
+                    callback_data="back"
+                )
+            ]
+        ]
+
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    # =====================
+    # BACK
+    # =====================
+    elif query.data == "back":
+
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "👥 Referrallarim",
+                    callback_data="refs"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔗 Taklif linkim",
+                    callback_data="link"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🏆 Reyting",
+                    callback_data="top"
+                )
+            ]
+        ]
+
+        text = (
+            f"Salom <b>{query.from_user.full_name}</b> 👋\n\n"
+            "Menu:"
+        )
+
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+
+# =========================
+# MAIN
+# =========================
 def main():
-app = Application.builder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler(“start”, start))
-app.add_handler(CommandHandler(“stats”, stats_command))
-app.add_handler(CallbackQueryHandler(button_handler))
-print(“Bot ishga tushdi!”)
-app.run_polling(allowed_updates=Update.ALL_TYPES)
 
-if **name** == “**main**”:
-main()
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(
+        CommandHandler("start", start)
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(buttons)
+    )
+
+    print("✅ Bot ishga tushdi!")
+
+    app.run_polling()
+
+# =========================
+# RUN
+# =========================
+if __name__ == "__main__":
+    main()
